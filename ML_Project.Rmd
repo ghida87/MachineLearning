@@ -1,0 +1,127 @@
+---
+title: "Practical Machine Learning"
+author: "Ghida Ibrahim"
+date: "6 March 2016"
+output: html_document
+---
+
+The goal of this document is to propose the most efficient machine learning algorithm for predicting how well individuals are performing a sport activity. In order to do so, we use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participant who were asked to perform barbell lifts correctly and incorrectly in 5 different ways. This data is referred to as WLE (Weight Lift Exercises) data. It is gathered in the context of the HAR (Human Activity Recognition) project.
+
+1. Loading Data
+
+```{r}
+TrainingData <- read.csv("~/pml-training.csv",na.strings=c("",NA))
+TestingData <- read.csv("~/pml-testing.csv",na.strings=c("",NA))
+```
+
+2. Cleaning Data
+
+We track and remove the co-variates of no or minimal relevance for building a prediction model. These include variables with a lot of empty or NA values (more than 90%) as well as near zero covariates. We also remove the first column of our data as it acts as an index and do not contain any relevant data.
+```{r, message=FALSE, warning=FALSE}
+library(caret)
+library(rattle)
+library(ggplot2)
+library(rpart.plot)
+library(randomForest)
+library(gridExtra)
+library(gbm)
+library(splines)
+library(plyr)
+```
+
+
+```{r}
+collist <- NULL
+for (i in 1:dim(TrainingData)[2]) 
+{
+if (length(which(is.na(TrainingData[,i]))) >= 0.9*dim(TrainingData)[2]) collist <- c(collist,i)
+i <- i+1
+}
+TrainingData2 <- TrainingData[,-c(1,collist)]
+TestingData2<- TestingData[,-c(1,collist)]
+nzv <- nearZeroVar(TrainingData2,saveMetrics=TRUE)
+TrainingData3 <- TrainingData2[,nzv$nzv==FALSE]
+TestingData3 <- TestingData2[,nzv$nzv==FALSE]
+```
+
+
+3. Creating the training and testing Datasets
+
+We partition the cleaned training data in order to create a training set and a test set. Considering the variable "classe" as an outcome, We assume that the training set and the test set respectively correspond to 70% and 30% of the total training data.
+
+```{r}
+set.seed(2509)
+inTrain <- createDataPartition(y=TrainingData3$classe,p=0.7,list=FALSE)
+training <- TrainingData3[inTrain,]
+testing <- TrainingData3[-inTrain,]
+```
+
+4. Fitting different prediction Models
+
+We next fit three prediction models using the training set, apply different models on the test set and compare these models in terms of Accuracy and out of Sample error. The models that we choose are Decision Tree, Random Forest and Boosting. We do not use k-fold cross validation for decision trees as a maximum amount of training data is needed for making trees decisions. The random forest model includes an embedded form of cross validation. We use k-fold repeated cross validation for the boosting model and we assume that k=3. 
+ 
+ 4.a) Decision Tree
+
+```{r}
+Treefit <- train(classe~.,data=training, method="rpart")
+fancyRpartPlot(Treefit$finalModel,sub ="")
+confusionMatrix(testing$classe,predict(Treefit,newdata=testing))$overall[1]
+```
+
+
+4.b) Random Forest
+```{r}
+RFfit <- randomForest(classe~., data=training)
+confusionMatrix(testing$classe,predict(RFfit,newdata=testing))$overall[1]
+plot(RFfit,main="Error Evolution: RandomForest")
+```
+
+4.c) Boosting
+
+```{r}
+fitControl <- trainControl(method="repeatedcv", number=3, repeats=3)
+Boostfit <- train(classe~.,data=training, method="gbm",trControl =fitControl, verbose=FALSE)
+confusionMatrix(predict(Boostfit,newdata=testing),testing$classe)$overall[1]
+plot(Boostfit, main="Accuracy Evolution: Boosting")
+```
+
+5. Selecting the best Model
+
+Next, we dress the accuracies and out of sample errors of different Models
+```{r}
+row1 <- c("Decision Tree", 100*round(confusionMatrix(testing$classe,predict(Treefit,newdata=testing))$overall[1],3),100*round(1-confusionMatrix(testing$classe,predict(Treefit,newdata=testing))$overall[1],3))
+row2 <- c("Random Forest", 100*round(confusionMatrix(testing$classe,predict(RFfit,newdata=testing))$overall[1],3),100*round(1-confusionMatrix(testing$classe,predict(RFfit,newdata=testing))$overall[1],3))
+row3 <- c("Boosting", 100*round(confusionMatrix(testing$classe,predict(Boostfit,newdata=testing))$overall[1],3),100*round(1-confusionMatrix(testing$classe,predict(Boostfit,newdata=testing))$overall[1],3))
+m <- rbind(row1,row2,row3)
+rownames(m) <- c('','','')
+colnames(m) <- c("Model Decsription","Overall Accuracy (%)","Out of Sample Error(%)")
+grid.table(m)
+```
+
+Comparing different models, we notice that the random Forest-based model provides the highest accuracy and the lowest out of sample error. Even though the Boosting model performs well (accuracy slightly lower than random forest), the consumed training time is high.
+Therefore, we select the random forest-based model and we apply it to 20 use cases in the testing data in order to predict how well 20 exercises are being performed (classe variable).
+
+
+6. Predicting Classes for 20 use cases:
+
+We remove the latest column (problem_id) from the cleaned Testing data as this column corresponds to the prediction outcome. We then assign to the remaining variables in the testing data the same classes as the corresponding variables in the training data and assign to the factor variables the same levels as similar variables in the training data.
+```{r}
+cleantesting <- TestingData3[,-58]
+trainingclass <- sapply(training[,-58],class)
+testingclass <- sapply(cleantesting,class)
+testingclass <- trainingclass
+factorclass <- testingclass[testingclass=="factor"]
+for (name in names(factorclass))
+  {levels(cleantesting[,name]) <- levels(training[,name])
+}
+```
+
+
+We finaly apply the selected random forest-based model to the final version of the testing data in order to predict the "classe"
+outcome of each of the 20 considered use cases.
+
+```{r}
+predict(RFfit,cleantesting)
+```
+
+
